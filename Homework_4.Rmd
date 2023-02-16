@@ -1,0 +1,367 @@
+---
+title: "Homework_4"
+author: "Arnab Aich"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+* Loading required Libraries 
+```{r message=FALSE, warning=FALSE,echo=TRUE}
+library(readr)
+library(readsparse)
+library(readr)
+library(dplyr)
+library(stargazer)
+library(caret)
+library(pROC)
+library(ggplot2)
+library(gridExtra)
+packages = c("parallel","doParallel","doSNOW")
+  invisible(xfun::pkg_attach(packages))
+```
+* Defining necessary function
+```{r,echo =TRUE}
+logistic = function(n_iter=100,data_train,data_test, eta,lambda)
+{
+  w_new = as.matrix(rep(0, ncol(data_train$x)))
+  n = 1
+  my.list = list()
+  train_miss = array()
+  iteration = array()
+  y_train = data_train$y
+  y_test = data_test$y
+  # Updating w
+  
+  while (n <= n_iter)
+  {
+    w = w_new
+    pred = data_train$x %*% w
+    v = as.matrix(data_train$y - (1+exp(-pred))^(-1))
+    #updating coefficients
+    w_new_theta = w + (1/eta)*t(data_train$x)%*%v
+    w_new = ifelse(abs(w_new_theta) > lambda,w_new_theta,0)
+    n = n + 1
+  } 
+  
+  
+  my.list$num_feature = length(which(w_new!=0))
+  ## Train Data
+  link_train = data_train$x %*% w_new
+  roc_train = roc(as.numeric(y_train), as.numeric(link_train))
+  threshold_train = as.numeric(coords(roc_train, "best", ret = "threshold",drop=TRUE)[1])
+  y_hat_train = as.factor(ifelse(link_train > threshold_train, 1, 0))
+  levels(y_hat_train) = c("0", "1")
+  
+  cm_train = confusionMatrix(as.factor(y_train), as.factor(y_hat_train))
+  my.list$train_miss = as.numeric(1 - cm_train$byClass['Balanced Accuracy'])
+  ## Test Data
+  link_test = data_test$x %*% w_new
+  # prob_test = exp(link_test)/(1+exp(link_test))
+  roc_test = roc(as.numeric(y_test), as.numeric(link_test))
+  threshold_test = as.numeric(coords(roc_test, "best", ret = "threshold",drop=TRUE)[1])
+  y_hat_test = as.factor(ifelse(link_test > threshold_test, 1, 0))
+  levels(y_hat_test) = c("0", "1")
+  cm_test = confusionMatrix(as.factor(y_test), as.factor(y_hat_test))
+  my.list$test_miss = as.numeric(1 - cm_test$byClass['Balanced Accuracy'])
+  return(my.list)
+}
+final_logistic = function(lambda1,train,test)
+{
+  r1 = logistic(n_iter=100, data_train=train, data_test =test,
+                eta=1/nrow(train$y),lambda=lambda1)
+  out = data.frame(lambda1,r1$num_feature,r1$train_miss,r1$test_miss)
+  colnames(out) = c("lambda","Feature","Miss.Train","Miss.Test")
+  rownames(out) = NULL
+  return(out)
+}
+Miss_plot = function(n_iter,lambda,eta,data)
+{
+  w_new = as.matrix(rep(0, ncol(data$x)))
+  n = 1
+  train_miss = array()
+  iteration = array()
+  y_train = data$y
+  invisible(while(n <= n_iter){
+    w = w_new
+    pred = data$x %*% w
+    v = as.matrix(data$y - (1+exp(-pred))^(-1))
+    #updating coefficients
+    w_new_theta = w + (1/eta)*t(data$x)%*%v
+    w_new = ifelse(abs(w_new_theta) > lambda,w_new_theta,0)
+    link_train = data$x %*% w_new
+    roc_train = roc(as.numeric(y_train), as.numeric(link_train))
+    threshold_train = as.numeric(coords(roc_train, "best", ret = "threshold",drop=TRUE)[1])
+    y_hat_train = as.factor(ifelse(link_train > threshold_train, 1, 0))
+    levels(y_hat_train) = c("0", "1")
+    cm_train = confusionMatrix(as.factor(y_train), as.factor(y_hat_train))
+    train_miss[n] = as.numeric(1 - cm_train$byClass['Balanced Accuracy'])
+    #keeping iteration number
+    iteration[n] = n
+    #updating iteration
+    n = n + 1
+  } )
+  data1=data.frame(iteration,train_miss)
+  miss.plot = ggplot(data1, aes(x = iteration)) + 
+    geom_line(aes(y = train_miss))+
+    ylab('Missclassification Errors')+xlab('Iteration')
+  return(miss.plot)
+}
+Roc_plot = function(n_iter,lambda,eta,train,test)
+{
+   
+   w_new = as.matrix(rep(0, ncol(train$x)))
+   n = 1
+   my.list = list()
+   y_train = train$y
+   y_test = test$y
+   while (n <= n_iter)
+   {
+     w = w_new
+     pred = train$x %*% w
+     v = as.matrix(train$y - (1+exp(-pred))^(-1))
+     #updating coefficients
+     w_new_theta = w + (1/eta)*t(train$x)%*%v
+     w_new = ifelse(abs(w_new_theta) > lambda,w_new_theta,0)
+     n = n + 1
+   } 
+   link_train = train$x %*% w_new
+   roc_train = roc(as.numeric(y_train), as.numeric(link_train))
+   link_test = test$x %*% w_new
+   roc_test = roc(as.numeric(y_test), as.numeric(link_test))
+   plot = ggroc(list(Train = roc_train, Test = roc_test ))+
+    geom_abline(slope=1,intercept = 1,color = "blue")
+   return(plot)
+ }
+```
+## Gisette Data
+
+* Import Dataset
+```{r , message=FALSE,echo =TRUE}
+train_X <-
+  read_table(
+    "D:/OneDrive - Florida State University/MyFSU_OneDrive/FSU Course Work/5635/Datasets/Gisette/gisette_train.data",
+    col_names = FALSE
+  )
+
+test_X <-
+  read_table(
+    "D:/OneDrive - Florida State University/MyFSU_OneDrive/FSU Course Work/5635/Datasets/Gisette/gisette_valid.data",
+    col_names = FALSE
+  )
+train_Y <-
+  read_csv(
+    "D:/OneDrive - Florida State University/MyFSU_OneDrive/FSU Course Work/5635/Datasets/Gisette/gisette_train.labels",
+    col_names = FALSE
+  )
+test_Y <-
+  read_table(
+    "D:/OneDrive - Florida State University/MyFSU_OneDrive/FSU Course Work/5635/Datasets/Gisette/gisette_valid.labels",
+    col_names = FALSE
+  )
+```
+* Setting Up data
+```{r, message=FALSE,echo =TRUE}
+test_Y[test_Y== -1] = 0
+train_Y[train_Y== -1] = 0
+x_mean=as.numeric(colMeans(train_X[,-5001]))
+x_sd =as.numeric(apply(train_X[,-5001],2,sd))
+X = rbind(scale(train_X[, -5001],center=x_mean,scale=x_sd),
+          scale(test_X[, -5001],center=x_mean,scale=x_sd))
+X = X[, colSums(is.na(X)) == 0]
+X_train = X[1:6000, ]
+X_train = cbind(X0 = rep(1, nrow(X_train)), X_train)
+data_train = list(y = as.matrix(train_Y), x = as.matrix(X_train))
+X_test = X[6001:7000, ]
+X_test =  cbind(X0 = rep(1, nrow(X_test)), X_test)
+data_test = list(y = as.matrix(test_Y), x = as.matrix(X_test))
+```
+## Missclasification Error plot for approximately 100 feature vs iteration
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+eta=1/nrow(data_train$y)
+Miss_plot(100,2265200,eta,data=data_train)
+```
+
+## Roc plot for approximately 500 feature
+```{r message=FALSE, warning=FALSE}
+Roc_plot(100,2265200,eta=1/nrow(data_train$y),data_train,data_test)
+```
+
+
+
+
+## Table for train and test missclasification, lambda and number of feature
+```{r message=FALSE, warning=FALSE , comment=NA}
+lambda_all = c(4732159,4623500,2265200,1559300,1219900)
+my.cluster <- makeCluster(10)
+registerDoParallel(my.cluster)
+clusterExport(my.cluster,c("final_logistic","logistic","data_train","data_test")
+              ,envir = .GlobalEnv)
+invisible(clusterEvalQ(my.cluster,
+             {library(dplyr)
+               library(stargazer)
+               library(caret)
+               library(pROC)
+             }))
+u=parSapply(my.cluster,lambda_all,final_logistic,data_train,data_test)
+D=data.frame(t(u))
+D
+stopCluster(my.cluster)
+```
+## Plot for training vs test Misclassification over number of features
+```{r message=FALSE, warning=FALSE , comment=NA}
+
+ggplot(D,aes(x= as.numeric(unlist(D['Feature']))))+
+        geom_line(aes(y = as.numeric(unlist(D['Miss.Train'])),color = "Training"))+
+        geom_line(aes(y = as.numeric(unlist(D['Miss.Test'])),color = "Testing"))+
+        ylim(0,0.2) + ylab('Misclassification Error')+ xlab('Number of Feature')
+```
+
+
+# Dexter Data
+
+* Import Dataset
+```{r , message=FALSE,echo =TRUE}
+train <-read.sparse("D:/OneDrive - Florida State University/MyFSU_OneDrive/FSU Course Work/5635/Datasets/dexter/dexter_train.data")
+
+train_y <- as.matrix(read_csv("D:/OneDrive - Florida State University/MyFSU_OneDrive/FSU Course Work/5635/Datasets/dexter/dexter_train.labels", 
+                              col_names = FALSE))
+test <-read.sparse("D:/OneDrive - Florida State University/MyFSU_OneDrive/FSU Course Work/5635/Datasets/dexter/dexter_valid.data")
+test_y <- as.matrix(read_csv("D:/OneDrive - Florida State University/MyFSU_OneDrive/FSU Course Work/5635/Datasets/dexter/dexter_valid.labels", 
+                             col_names = FALSE))
+```
+* Setting Up data
+```{r, message=FALSE,echo =TRUE}
+
+x_mean=as.numeric(colMeans(as.matrix(train$X)))
+x_sd =as.numeric(apply(as.matrix(train$X),2,sd))
+
+
+train_y[train_y== -1] = 0
+test_y[test_y== -1] = 0
+
+train$x <- as.matrix(cbind(rep(1,nrow(train$X)),scale(train$X,x_mean,x_sd)))
+test$x <- as.matrix(cbind(rep(1,nrow(test$X)),scale(test$X,x_mean,x_sd)))
+
+X = rbind(train$x, test$x)
+X = X[, colSums(is.na(X)) == 0]
+data_train1 = list(y=train_y,x=as.matrix(X[1:300,]))
+data_test1 = list(y=test_y,x=as.matrix(X[301:600,]))
+
+```
+## Missclasification Error plot for approximately 100 feature vs iteration
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+eta=1/nrow(data_train1$y)
+Miss_plot(100,6155,eta,data=data_train1)
+```
+
+## Roc plot for approximately 500 feature
+```{r message=FALSE, warning=FALSE}
+Roc_plot(100,4213,eta=1/nrow(data_train1$y),data_train1,data_test1)
+```
+```{r warning=FALSE, include=FALSE}
+rm(train_X)
+rm(test_X)
+```
+
+## Table for train and test missclasification, lambda and number of feature
+```{r message=FALSE, warning=FALSE , comment=NA}
+lambda_all1 = c(9912,7313,6155,5040.267875,4213)
+my.cluster <- makeCluster(10)
+registerDoParallel(my.cluster)
+clusterExport(my.cluster,c("final_logistic","logistic","data_train1","data_test1")
+              ,envir = .GlobalEnv)
+invisible(clusterEvalQ(my.cluster,
+             {library(dplyr)
+               library(stargazer)
+               library(caret)
+               library(pROC)
+             }))
+u=parSapply(my.cluster,lambda_all1,final_logistic,data_train1,data_test1)
+D=data.frame(t(u))
+D
+stopCluster(my.cluster)
+```
+## Plot for training vs test Misclassification over number of features
+```{r message=FALSE, warning=FALSE , comment=NA}
+ggplot(D,aes(x= as.numeric(unlist(D['Feature']))))+
+        geom_line(aes(y = as.numeric(unlist(D['Miss.Train'])),color = "Training"))+
+        geom_line(aes(y = as.numeric(unlist(D['Miss.Test'])),color = "Testing"))+
+        ylim(0,0.2) + ylab('Misclassification Error')+ xlab('Number of Feature')
+```
+
+
+# Madelon Data
+
+* Import Dataset
+```{r , message=FALSE,echo =TRUE}
+train_X<- read_table("D:/OneDrive - Florida State University/MyFSU_OneDrive/FSU Course Work/5635/Datasets/MADELON/madelon_train.data", 
+                col_names = FALSE)
+train_Y<- read_table("D:/OneDrive - Florida State University/MyFSU_OneDrive/FSU Course Work/5635/Datasets/MADELON/madelon_train.labels",
+                col_names = FALSE)
+test_X <- read_table("D:/OneDrive - Florida State University/MyFSU_OneDrive/FSU Course Work/5635/Datasets/MADELON/madelon_valid.data", 
+                col_names = FALSE)
+test_Y <- read_table("D:/OneDrive - Florida State University/MyFSU_OneDrive/FSU Course Work/5635/Datasets/MADELON/madelon_valid.labels", 
+                col_names = FALSE)
+
+
+```
+* Setting Up data
+```{r, message=FALSE,echo =TRUE}
+train_X=train_X[,-501]
+test_X=test_X[,-501]
+test_Y[test_Y== -1] = 0
+train_Y[train_Y== -1] = 0
+x_mean=as.numeric(colMeans(train_X))
+x_sd =as.numeric(apply(train_X,2,sd))
+
+X = rbind(scale(train_X,center=x_mean,scale=x_sd),
+          scale(test_X,center=x_mean,scale=x_sd))
+X = X[, colSums(is.na(X)) == 0]
+
+
+X_train = X[1:2000, ]
+X_train = cbind(X0 = rep(1, nrow(X_train)), X_train)
+
+data_train2= list(y = as.matrix(train_Y), x = as.matrix(X_train))
+X_test = X[2001:2600, ]
+X_test =  cbind(X0 = rep(1, nrow(X_test)), X_test)
+data_test2 = list(y = as.matrix(test_Y), x = as.matrix(X_test))
+
+```
+## Missclasification Error plot for approximately 100 feature vs iteration
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+eta=1/nrow(data_train2$y)
+Miss_plot(100,lambda=110290,eta,data=data_train2)
+```
+
+## Roc plot for approximately 500 feature
+```{r message=FALSE, warning=FALSE}
+Roc_plot(100,lambda=1098,eta=1/nrow(data_train2$y),data_train2,data_test2)
+```
+.
+
+## Table for train and test missclasification, lambda and number of feature
+```{r message=FALSE, warning=FALSE , comment=NA}
+lambda_all2 = c(208475,136476,110290,54595,1098)
+my.cluster <- makeCluster(10)
+registerDoParallel(my.cluster)
+clusterExport(my.cluster,c("final_logistic","logistic","data_train2","data_test2")
+              ,envir = .GlobalEnv)
+invisible(clusterEvalQ(my.cluster,
+             {library(dplyr)
+               library(stargazer)
+               library(caret)
+               library(pROC)
+             }))
+u=parSapply(my.cluster,lambda_all2,final_logistic,data_train2,data_test2)
+D=data.frame(t(u))
+D
+stopCluster(my.cluster)
+```
+## Plot for training vs test Misclassification over number of features
+```{r message=FALSE, warning=FALSE , comment=NA}
+ggplot(D,aes(x= as.numeric(unlist(D['Feature']))))+
+        geom_line(aes(y = as.numeric(unlist(D['Miss.Train'])),color = "Training"))+
+        geom_line(aes(y = as.numeric(unlist(D['Miss.Test'])),color = "Testing"))+
+        ylim(0,0.6) + ylab('Misclassification Error')+ xlab('Number of Feature')
+```
